@@ -1,5 +1,5 @@
 open List;;
-type prop = T | F | L of string 
+type prop = T | F | L of int
 
                   | Not of prop
 
@@ -8,7 +8,7 @@ type prop = T | F | L of string
 let rec listletters a l= match a with
 | T -> l
 | F -> l
-| L string -> string::l
+| L i -> i::l
 | Not b -> append (listletters b []) l
 | And (b,c) -> append (append (listletters b []) (listletters c [])) l 
 | Or (b,c) -> append (append (listletters b []) (listletters c [])) l 
@@ -24,7 +24,7 @@ let letters a = uniquelist (listletters a []);;
 let rec truth a fn = match a with
 | T -> true
 | F -> false
-| L string -> fn string
+| L i -> fn i
 | Not b -> not (truth b fn)
 | And(F, _ ) -> false
 | And(_, F) -> false
@@ -37,15 +37,15 @@ let rec truth a fn = match a with
 | Impl (b,c) -> (not (truth b fn)) || (truth c fn) 
 | Iff (b,c) -> ((truth b fn) && (truth c fn))  || ((not (truth c fn)) && (not (truth b fn)))
 ;;
-let rec replaceivar a str p = match a with
+let rec replaceivar a ivar p = match a with
 | T -> T
 | F -> F
-| L string -> if (string=str) then p else (L string)
-| Not b -> Not (replaceivar b str p)
-| And (b,c) -> And((replaceivar b str p), (replaceivar c str p))
-| Or (b,c) -> Or((replaceivar b str p), (replaceivar c str p))
-| Impl (b,c) -> Impl((replaceivar b str p), (replaceivar c str p))
-| Iff (b,c) -> Iff((replaceivar b str p), (replaceivar c str p))
+| L i -> if (i=ivar) then p else (L i)
+| Not b -> Not (replaceivar b ivar p)
+| And (b,c) -> And((replaceivar b ivar p), (replaceivar c ivar p))
+| Or (b,c) -> Or((replaceivar b ivar p), (replaceivar c ivar p))
+| Impl (b,c) -> Impl((replaceivar b ivar p), (replaceivar c ivar p))
+| Iff (b,c) -> Iff((replaceivar b ivar p), (replaceivar c ivar p))
 ;;
 exception DontCare;;
 let testtable a = match a with
@@ -77,29 +77,103 @@ let lookup htable i l h =
 let insert htable i l h u = htable@[((i,l,h),u)];;
 
 let mk ttable htable i l h =
-	if l=h then (ttable, htable, l)
-	else if (member htable i l h) then (ttable, htable, (lookup htable i l h))
-	else let u, ttable = add ttable i l h in
-		let htable = insert htable i l h u in
-		(ttable, htable, u);;
+	if l=h then l
+	else if (Hashtbl.mem htable (i, l, h)) then (Hashtbl.find htable (i, l, h))
+	else let u = Hashtbl.length ttable in
+		(Hashtbl.add ttable u (i,l,h));
+		(Hashtbl.add htable (i,l,h) u);
+		u;;
+let rec maxElem l i = match l with
+| [] -> i
+| x::xs -> if x<i then (maxElem xs i) else (maxElem xs x);;
+
 let build ttable htable t =
 	let lettersList = letters t in
-	let n = length lettersList in
+	let n = (maxElem lettersList 0) in
+	let htable = Hashtbl.create 111111 in
+	let ttable = Hashtbl.create 111111 in
+	Hashtbl.add ttable 0 (10000,0,0);
+	Hashtbl.add ttable 1 (10000,0,0);
 	let rec builddash ttable htable t i = 
-		if (i<n) then (
+		if (i>n) then (
 			let trutht = truth t testtable in
-			if (trutht=false) then (ttable, htable, 0) else (ttable, htable, 1)
+			if (trutht=false) then 0 else 1
 		)
 		else (
 			let replaceiwithFalse = replaceivar t (nth lettersList (i-1)) F in
 			let replaceiwithTrue = replaceivar t (nth lettersList (i-1)) T in
-			let ttable, htable, v0 = builddash ttable htable replaceiwithFalse (i+1) in
-			let ttable, htable, v1 = builddash ttable htable replaceiwithTrue (i+1) in
+			let v0 = builddash ttable htable replaceiwithFalse (i+1) in
+			let v1 = builddash ttable htable replaceiwithTrue (i+1) in
 			mk ttable htable i v0 v1
 		)
 	in
-	builddash ttable htable t 1
+	let ans = builddash ttable htable t 1 in
+	ttable
 ;;
+let simplemax a b = if a>b then a else b;;
+
+let var table u = let (a,b,c) = Hashtbl.find table u in a;;
+let low table u = let (a,b,c) = Hashtbl.find table u in b;;
+let high table u = let (a,b,c) = Hashtbl.find table u in c;;
+
+let apply tbdd1 tbdd2 u1 u2 op =
+	let n1, _, _  = Hashtbl.find tbdd1 0 in
+	let n2,_,_ = Hashtbl.find tbdd2 0 in
+	let n = simplemax n1 n2 in
+	let gtable = Hashtbl.create 111111 in
+	let ttable = Hashtbl.create 111111 in
+	let htable = Hashtbl.create 111111 in
+	Hashtbl.add ttable 0 (n,0,0);
+	Hashtbl.add ttable 1 (n,0,0);
+	let rec app u1 u2 = 
+		if(Hashtbl.mem gtable (u1,u2)) then (Hashtbl.find gtable (u1,u2))
+	else if ((u1=0 || u1=1) && (u2=0 || u2=1)) then 
+		let u = (op u1 u2) in
+		Hashtbl.add gtable (u1,u2) u;
+		u
+	else if (var tbdd1 u1) = (var tbdd2 u2) then
+		let first = (app (low tbdd1 u1) (low tbdd2 u2)) in
+		let second = (app (high tbdd1 u1) (high tbdd2 u2)) in
+		let u = mk ttable htable (var tbdd1 u1) first second in
+		Hashtbl.add gtable (u1, u2) u;
+		u
+	else if (var tbdd1 u1) < (var tbdd2 u2) then
+		let first = (app (low tbdd1 u1) u2) in
+		let second = (app (high tbdd1 u1) u2 ) in
+		let u = mk ttable htable (var tbdd1 u1) first second in
+		Hashtbl.add gtable (u1,u2) u;
+		u
+	else
+		let first = (app u1 (low tbdd2 u2)) in
+		let second = (app u1 (high tbdd2 u2)) in
+		let u = mk ttable htable (var tbdd2 u2) first second in
+		Hashtbl.add gtable (u1, u2) u;
+		u
+	in
+	let ans = (app u1 u2) in
+	ttable;;
+
+let restrict t_bdd1 u j b = 
+	let n1,_,_= Hashtbl.find t_bdd1 0 in 
+	let t_bdd = Hashtbl.create 111111 in 
+	let h_bdd = Hashtbl.create 111111 in
+	Hashtbl.add t_bdd 0 (10000,0,0);	
+	Hashtbl.add t_bdd 1 (10000,0,0);
+	let rec res u = 
+		if (var t_bdd1 u)>j then u
+		else 
+			if (var t_bdd1 u)<j then 
+				let temp1 = (res (low t_bdd1 u)) in 
+				let temp2 = (res (high t_bdd1 u)) in 
+				mk t_bdd h_bdd (var t_bdd1 u) temp1 temp2
+		else if b=0 then (res (low t_bdd1 u))
+		else (res (high t_bdd1 u))
+	in 
+	let f = (res u) in 
+	t_bdd;;
+
+
+
 
 
 
